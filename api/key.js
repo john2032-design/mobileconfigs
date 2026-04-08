@@ -1,5 +1,12 @@
-const { sql } = require('@vercel/postgres')
+const { createPool } = require('@vercel/postgres')
 const crypto = require('crypto')
+
+const connectionString = process.env.APIKey_POSTGRES_URL
+if (!connectionString) {
+  console.error('Missing APIKey_POSTGRES_URL environment variable')
+}
+
+const pool = createPool({ connectionString })
 
 const BOT_SECRET = process.env.BOT_SECRET || 'e95eefb03ea57cc5d6810a849c51b4b5fd88b7fbf764a73063d2bcf35b3ad7fc'
 
@@ -9,7 +16,7 @@ function generateKey() {
 
 async function ensureTable() {
   try {
-    await sql`
+    await pool.sql`
       CREATE TABLE IF NOT EXISTS api_keys (
         key TEXT PRIMARY KEY,
         created_at BIGINT NOT NULL,
@@ -44,7 +51,7 @@ module.exports = async (req, res) => {
       const now = Math.floor(Date.now() / 1000)
       const expiresAt = now + 86400
 
-      await sql`
+      await pool.sql`
         INSERT INTO api_keys (key, created_at, expires_at)
         VALUES (${key}, ${now}, ${expiresAt})
       `
@@ -64,7 +71,7 @@ module.exports = async (req, res) => {
 
     try {
       const now = Math.floor(Date.now() / 1000)
-      const result = await sql`
+      const result = await pool.sql`
         SELECT key, expires_at, active FROM api_keys WHERE key = ${key}
       `
 
@@ -95,7 +102,7 @@ module.exports = async (req, res) => {
 
     try {
       const now = Math.floor(Date.now() / 1000)
-      const result = await sql`
+      const result = await pool.sql`
         SELECT key, created_at, expires_at, active FROM api_keys WHERE key = ${key}
       `
 
