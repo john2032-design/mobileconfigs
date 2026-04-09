@@ -19,6 +19,7 @@ async function ensureTable() {
     await pool.sql`
       CREATE TABLE IF NOT EXISTS api_keys (
         key TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
         created_at BIGINT NOT NULL,
         expires_at BIGINT NOT NULL,
         active INT DEFAULT 1
@@ -46,17 +47,33 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' })
     }
 
+    const { user_id } = req.body
+    if (!user_id) {
+      return res.status(400).json({ error: 'user_id required' })
+    }
+
     try {
-      const key = generateKey()
       const now = Math.floor(Date.now() / 1000)
+
+      const existing = await pool.sql`
+        SELECT key, expires_at FROM api_keys 
+        WHERE user_id = ${user_id} AND active = 1 AND expires_at > ${now}
+      `
+
+      if (existing.rowCount > 0) {
+        const row = existing.rows[0]
+        return res.json({ key: row.key, expires_at: row.expires_at, existing: true })
+      }
+
+      const key = generateKey()
       const expiresAt = now + 86400
 
       await pool.sql`
-        INSERT INTO api_keys (key, created_at, expires_at)
-        VALUES (${key}, ${now}, ${expiresAt})
+        INSERT INTO api_keys (key, user_id, created_at, expires_at)
+        VALUES (${key}, ${user_id}, ${now}, ${expiresAt})
       `
 
-      return res.json({ key, expires_at: expiresAt })
+      return res.json({ key, expires_at: expiresAt, existing: false })
     } catch (err) {
       console.error('Key generation DB error:', err)
       return res.status(500).json({ error: 'Failed to generate key' })
@@ -103,7 +120,7 @@ module.exports = async (req, res) => {
     try {
       const now = Math.floor(Date.now() / 1000)
       const result = await pool.sql`
-        SELECT key, created_at, expires_at, active FROM api_keys WHERE key = ${key}
+        SELECT key, user_id, created_at, expires_at, active FROM api_keys WHERE key = ${key}
       `
 
       if (result.rowCount === 0) {
@@ -114,6 +131,7 @@ module.exports = async (req, res) => {
       const valid = row.active && row.expires_at > now
       return res.json({
         key: row.key,
+        user_id: row.user_id,
         created_at: row.created_at,
         expires_at: row.expires_at,
         active: row.active,
