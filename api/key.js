@@ -122,6 +122,33 @@ module.exports = async (req, res) => {
     }
   }
 
+  if (req.method === 'POST' && path === '/delete') {
+    const authHeader = req.headers.authorization
+    if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+
+    const { user_id } = req.body
+    if (!user_id) {
+      return res.status(400).json({ error: 'user_id required' })
+    }
+
+    try {
+      const now = Math.floor(Date.now() / 1000)
+      const result = await pool.sql`
+        UPDATE api_keys SET active = 0
+        WHERE user_id = ${user_id} AND active = 1 AND expires_at > ${now}
+        RETURNING key
+      `
+
+      const deletedCount = result.rowCount
+      return res.json({ success: true, deleted: deletedCount })
+    } catch (err) {
+      console.error('Key deletion error:', err)
+      return res.status(500).json({ error: 'Failed to delete keys', details: err.message })
+    }
+  }
+
   if (req.method === 'GET' && path.startsWith('/info/')) {
     const key = path.split('/')[2]
     if (!key) {
