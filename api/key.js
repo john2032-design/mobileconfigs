@@ -58,13 +58,14 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' })
     }
 
-    const { user_id } = req.body
+    const { user_id, whitelisted } = req.body
     if (!user_id) {
       return res.status(400).json({ error: 'user_id required' })
     }
 
     try {
       const now = Math.floor(Date.now() / 1000)
+      const expiresAt = now + (whitelisted ? 280800 : 86400)
 
       const existing = await pool.sql`
         SELECT key, expires_at FROM api_keys 
@@ -77,7 +78,6 @@ module.exports = async (req, res) => {
       }
 
       const key = generateKey()
-      const expiresAt = now + 86400
 
       await pool.sql`
         INSERT INTO api_keys (key, user_id, created_at, expires_at)
