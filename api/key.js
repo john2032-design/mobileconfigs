@@ -19,14 +19,20 @@ async function ensureTable() {
     await pool.sql`
       CREATE TABLE IF NOT EXISTS api_keys (
         key TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
         created_at BIGINT NOT NULL,
         expires_at BIGINT NOT NULL,
         active INT DEFAULT 1
       )
     `
+    const columnCheck = await pool.sql`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'api_keys' AND column_name = 'user_id'
+    `
+    if (columnCheck.rowCount === 0) {
+      await pool.sql`ALTER TABLE api_keys ADD COLUMN user_id TEXT`
+    }
   } catch (err) {
-    console.error('Table creation error:', err)
+    console.error('Table creation/migration error:', err)
     throw err
   }
 }
@@ -35,7 +41,7 @@ module.exports = async (req, res) => {
   try {
     await ensureTable()
   } catch (err) {
-    return res.status(500).json({ error: 'Database connection failed' })
+    return res.status(500).json({ error: 'Database connection failed', details: err.message })
   }
 
   const url = new URL(req.url, `http://${req.headers.host}`)
@@ -76,7 +82,7 @@ module.exports = async (req, res) => {
       return res.json({ key, expires_at: expiresAt, existing: false })
     } catch (err) {
       console.error('Key generation DB error:', err)
-      return res.status(500).json({ error: 'Failed to generate key' })
+      return res.status(500).json({ error: 'Failed to generate key', details: err.message })
     }
   }
 
@@ -107,7 +113,7 @@ module.exports = async (req, res) => {
       return res.json({ valid: true, expires_at: row.expires_at })
     } catch (err) {
       console.error('Validation error:', err)
-      return res.status(500).json({ error: 'Database error' })
+      return res.status(500).json({ error: 'Database error', details: err.message })
     }
   }
 
@@ -139,7 +145,7 @@ module.exports = async (req, res) => {
       })
     } catch (err) {
       console.error('Info error:', err)
-      return res.status(500).json({ error: 'Database error' })
+      return res.status(500).json({ error: 'Database error', details: err.message })
     }
   }
 
