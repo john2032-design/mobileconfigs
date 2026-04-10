@@ -24,12 +24,16 @@ async function ensureTable() {
         active INT DEFAULT 1
       )
     `
-    const columnCheck = await pool.sql`
+    const columns = await pool.sql`
       SELECT column_name FROM information_schema.columns 
-      WHERE table_name = 'api_keys' AND column_name = 'user_id'
+      WHERE table_name = 'api_keys'
     `
-    if (columnCheck.rowCount === 0) {
+    const existing = columns.rows.map(r => r.column_name)
+    if (!existing.includes('user_id')) {
       await pool.sql`ALTER TABLE api_keys ADD COLUMN user_id TEXT`
+    }
+    if (!existing.includes('key_type')) {
+      await pool.sql`ALTER TABLE api_keys ADD COLUMN key_type TEXT DEFAULT '24h'`
     }
   } catch (err) {
     console.error('Table creation/migration error:', err)
@@ -58,33 +62,48 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' })
     }
 
-    const { user_id, whitelisted } = req.body
+    const { user_id, type } = req.body
     if (!user_id) {
       return res.status(400).json({ error: 'user_id required' })
     }
 
-    try {
-      const now = Math.floor(Date.now() / 1000)
-      const expiresAt = now + (whitelisted ? 280800 : 86400)
+    const keyType = type === '78h' ? '78h' : (type === 'infinite' ? 'infinite' : (type === '1month' ? '1month' : '24h'))
+    const now = Math.floor(Date.now() / 1000)
+    let expiresAt
+    if (keyType === 'infinite') {
+      expiresAt = 2147483647
+    } else if (keyType === '78h') {
+      expiresAt = now + 280800
+    } else if (keyType === '1month') {
+      expiresAt = now + 2592000
+    } else {
+      expiresAt = now + 86400
+    }
 
+    try {
       const existing = await pool.sql`
-        SELECT key, expires_at FROM api_keys 
+        SELECT key, expires_at, key_type FROM api_keys 
         WHERE user_id = ${user_id} AND active = 1 AND expires_at > ${now}
       `
 
       if (existing.rowCount > 0) {
         const row = existing.rows[0]
-        return res.json({ key: row.key, expires_at: row.expires_at, existing: true })
+        return res.json({
+          key: row.key,
+          expires_at: row.expires_at,
+          key_type: row.key_type,
+          existing: true
+        })
       }
 
       const key = generateKey()
 
       await pool.sql`
-        INSERT INTO api_keys (key, user_id, created_at, expires_at)
-        VALUES (${key}, ${user_id}, ${now}, ${expiresAt})
+        INSERT INTO api_keys (key, user_id, created_at, expires_at, key_type)
+        VALUES (${key}, ${user_id}, ${now}, ${expiresAt}, ${keyType})
       `
 
-      return res.json({ key, expires_at: expiresAt, existing: false })
+      return res.json({ key, expires_at: expiresAt, key_type: keyType, existing: false })
     } catch (err) {
       console.error('Key generation DB error:', err)
       return res.status(500).json({ error: 'Failed to generate key', details: err.message })
@@ -100,7 +119,7 @@ module.exports = async (req, res) => {
     try {
       const now = Math.floor(Date.now() / 1000)
       const result = await pool.sql`
-        SELECT key, expires_at, active FROM api_keys WHERE key = ${key}
+        SELECT key, expires_at, active, key_type FROM api_keys WHERE key = ${key}
       `
 
       if (result.rowCount === 0) {
@@ -112,13 +131,61 @@ module.exports = async (req, res) => {
         return res.json({ valid: false, reason: 'inactive' })
       }
       if (row.expires_at < now) {
-        return res.json({ valid: false, reason: 'expired', expires_at: row.expires_at })
+        return res.json({ valid: false, reason: 'expired', expires_at: row.expires_at, key_type: row.key_type })
       }
 
-      return res.json({ valid: true, expires_at: row.expires_at })
+      return res.json({ valid: true, expires_at: row.expires_at, key_type: row.key_type })
     } catch (err) {
       console.error('Validation error:', err)
       return res.status(500).json({ error: 'Database error', details: err.message })
+    }
+  }
+
+  if (req.method === 'POST' && path === '/renew') {
+    const authHeader = req.headers.authorization
+    if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+
+    const { key } = req.body
+    if (!key) {
+      return res.status(400).json({ error: 'Key required' })
+    }
+
+    try {
+      const now = Math.floor(Date.now() / 1000)
+      const result = await pool.sql`
+        SELECT key, key_type, active FROM api_keys WHERE key = ${key}
+      `
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: 'Key not found' })
+      }
+
+      const row = result.rows[0]
+      if (!row.active) {
+        return res.status(400).json({ error: 'Key is inactive' })
+      }
+      if (row.key_type === 'infinite') {
+        return res.status(400).json({ error: 'Infinite keys cannot be renewed' })
+      }
+
+      let duration
+      if (row.key_type === '78h') duration = 280800
+      else if (row.key_type === '1month') duration = 2592000
+      else duration = 86400
+
+      const newExpiresAt = now + duration
+
+      await pool.sql`
+        UPDATE api_keys SET expires_at = ${newExpiresAt}
+        WHERE key = ${key}
+      `
+
+      return res.json({ success: true, expires_at: newExpiresAt, key_type: row.key_type })
+    } catch (err) {
+      console.error('Key renewal error:', err)
+      return res.status(500).json({ error: 'Failed to renew key', details: err.message })
     }
   }
 
@@ -158,7 +225,7 @@ module.exports = async (req, res) => {
     try {
       const now = Math.floor(Date.now() / 1000)
       const result = await pool.sql`
-        SELECT key, user_id, created_at, expires_at, active FROM api_keys WHERE key = ${key}
+        SELECT key, user_id, created_at, expires_at, active, key_type FROM api_keys WHERE key = ${key}
       `
 
       if (result.rowCount === 0) {
@@ -173,6 +240,7 @@ module.exports = async (req, res) => {
         created_at: row.created_at,
         expires_at: row.expires_at,
         active: row.active,
+        key_type: row.key_type,
         valid
       })
     } catch (err) {
