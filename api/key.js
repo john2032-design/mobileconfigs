@@ -56,6 +56,7 @@ module.exports = async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`)
   const path = url.pathname.replace(/^\/api\/key/, '')
 
+  // ----- Generate key -----
   if (req.method === 'POST' && path === '/generate') {
     const authHeader = req.headers.authorization
     if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
@@ -110,6 +111,7 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ----- Validate key -----
   if (req.method === 'POST' && path === '/validate') {
     const { key } = req.body
     if (!key) {
@@ -141,6 +143,7 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ----- Renew key -----
   if (req.method === 'POST' && path === '/renew') {
     const authHeader = req.headers.authorization
     if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
@@ -189,6 +192,7 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ----- Delete keys for a user -----
   if (req.method === 'POST' && path === '/delete') {
     const authHeader = req.headers.authorization
     if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
@@ -216,6 +220,64 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ----- Delete ALL active keys (new) -----
+  if (req.method === 'POST' && path === '/delete-all') {
+    const authHeader = req.headers.authorization
+    if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+
+    try {
+      const now = Math.floor(Date.now() / 1000)
+      const result = await pool.sql`
+        UPDATE api_keys SET active = 0
+        WHERE active = 1 AND expires_at > ${now}
+        RETURNING key
+      `
+
+      const deletedCount = result.rowCount
+      return res.json({ success: true, deleted: deletedCount })
+    } catch (err) {
+      console.error('Delete all keys error:', err)
+      return res.status(500).json({ error: 'Failed to delete all keys', details: err.message })
+    }
+  }
+
+  // ----- List active keys (new) -----
+  if (req.method === 'GET' && path === '/list') {
+    const authHeader = req.headers.authorization
+    if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+
+    const activeOnly = url.searchParams.get('active') === 'true'
+    const now = Math.floor(Date.now() / 1000)
+
+    try {
+      let query
+      if (activeOnly) {
+        query = await pool.sql`
+          SELECT key, user_id, expires_at, key_type, created_at
+          FROM api_keys
+          WHERE active = 1 AND expires_at > ${now}
+          ORDER BY expires_at ASC
+        `
+      } else {
+        query = await pool.sql`
+          SELECT key, user_id, expires_at, key_type, created_at
+          FROM api_keys
+          ORDER BY expires_at ASC
+        `
+      }
+
+      return res.json({ keys: query.rows })
+    } catch (err) {
+      console.error('List keys error:', err)
+      return res.status(500).json({ error: 'Database error', details: err.message })
+    }
+  }
+
+  // ----- Info for a single key -----
   if (req.method === 'GET' && path.startsWith('/info/')) {
     const key = path.split('/')[2]
     if (!key) {
