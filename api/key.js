@@ -216,6 +216,27 @@ module.exports = async (req, res) => {
     }
   }
 
+  if (req.method === 'POST' && path === '/clear-expired') {
+    const authHeader = req.headers.authorization
+    if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+
+    try {
+      const now = Math.floor(Date.now() / 1000)
+      const result = await pool.sql`
+        UPDATE api_keys SET active = 0
+        WHERE active = 1 AND expires_at < ${now}
+        RETURNING key
+      `
+
+      return res.json({ success: true, cleared: result.rowCount })
+    } catch (err) {
+      console.error('Clear expired error:', err)
+      return res.status(500).json({ error: 'Failed to clear expired keys', details: err.message })
+    }
+  }
+
   if (req.method === 'GET' && path.startsWith('/info/')) {
     const key = path.split('/')[2]
     if (!key) {
