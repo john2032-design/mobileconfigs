@@ -67,7 +67,11 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'user_id required' })
     }
 
-    const keyType = type === '78h' ? '78h' : (type === 'infinite' ? 'infinite' : (type === '1month' ? '1month' : '24h'))
+    const keyType = type === '78h' ? '78h' 
+      : (type === 'infinite' ? 'infinite' 
+        : (type === '1month' ? '1month' 
+          : (type === '1year' ? '1year' : '24h')))
+
     const now = Math.floor(Date.now() / 1000)
     let expiresAt
     if (keyType === 'infinite') {
@@ -76,6 +80,8 @@ module.exports = async (req, res) => {
       expiresAt = now + 280800
     } else if (keyType === '1month') {
       expiresAt = now + 2592000
+    } else if (keyType === '1year') {
+      expiresAt = now + 31536000
     } else {
       expiresAt = now + 86400
     }
@@ -173,6 +179,7 @@ module.exports = async (req, res) => {
       let duration
       if (row.key_type === '78h') duration = 280800
       else if (row.key_type === '1month') duration = 2592000
+      else if (row.key_type === '1year') duration = 31536000
       else duration = 86400
 
       const newExpiresAt = now + duration
