@@ -147,6 +147,102 @@ module.exports = async (req, res) => {
     }
   }
 
+  if (req.method === 'POST' && path === '/validate-hwid') {
+    const { key, hwidHash, deviceHash, userAgent, ip, fingerprint } = req.body
+    if (!key) {
+      return res.status(400).json({ valid: false, reason: 'Key required' })
+    }
+
+    const HWID_API_BASE = 'https://vortixworld-end.vercel.app'
+    const INTERNAL_SECRET = process.env.HWID_RESET_SECRET || '7f3d8a2e4b6c9f1d3a5e7c9b2d4f6a8c0e1d3f5a7b9c1e3d5f7a9b1c3e5d7f9'
+
+    try {
+      const now = Math.floor(Date.now() / 1000)
+      const keyResult = await pool.sql`
+        SELECT key, active, expires_at FROM api_keys WHERE key = ${key}
+      `
+      if (keyResult.rowCount === 0) {
+        return res.status(404).json({ valid: false, reason: 'Key not found' })
+      }
+      const keyRow = keyResult.rows[0]
+      if (!keyRow.active) {
+        return res.status(400).json({ valid: false, reason: 'Key inactive' })
+      }
+      if (keyRow.expires_at < now) {
+        return res.status(400).json({ valid: false, reason: 'Key expired' })
+      }
+
+      const identityCheckRes = await fetch(`${HWID_API_BASE}/api/hwid/identity-check`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${INTERNAL_SECRET}`
+        },
+        body: JSON.stringify({ apiKey: key, hwidHash, deviceHash, userAgent, ip, fingerprint })
+      })
+
+      if (!identityCheckRes.ok) {
+        const errData = await identityCheckRes.json().catch(() => ({}))
+        return res.status(identityCheckRes.status).json({
+          valid: false,
+          reason: errData.reason || 'identity_check_failed'
+        })
+      }
+
+      const identityData = await identityCheckRes.json()
+      return res.status(200).json(identityData)
+    } catch (err) {
+      console.error('validate-hwid error:', err)
+      return res.status(500).json({ valid: false, reason: 'Internal error', details: err.message })
+    }
+  }
+
+  if (req.method === 'POST' && path === '/reset-hwid') {
+    const { key } = req.body
+    if (!key) {
+      return res.status(400).json({ error: 'Key required' })
+    }
+
+    const HWID_API_BASE = 'https://vortixworld-end.vercel.app'
+    const HWID_RESET_SECRET = process.env.HWID_RESET_SECRET || BOT_SECRET
+
+    try {
+      const now = Math.floor(Date.now() / 1000)
+      const keyResult = await pool.sql`
+        SELECT key, active, expires_at FROM api_keys WHERE key = ${key}
+      `
+      if (keyResult.rowCount === 0) {
+        return res.status(404).json({ error: 'Key not found' })
+      }
+      const keyRow = keyResult.rows[0]
+      if (!keyRow.active) {
+        return res.status(400).json({ error: 'Key is inactive' })
+      }
+      if (keyRow.expires_at < now) {
+        return res.status(400).json({ error: 'Key is expired' })
+      }
+
+      const hwidRes = await fetch(`${HWID_API_BASE}/api/hwid/reset`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${HWID_RESET_SECRET}`
+        },
+        body: JSON.stringify({ apiKey: key })
+      })
+
+      const hwidData = await hwidRes.json()
+      if (!hwidRes.ok) {
+        return res.status(hwidRes.status).json({ error: hwidData.message || 'HWID reset failed' })
+      }
+
+      return res.json({ success: true, message: 'HWID binding cleared' })
+    } catch (err) {
+      console.error('HWID reset error:', err)
+      return res.status(500).json({ error: 'Failed to reset HWID', details: err.message })
+    }
+  }
+
   if (req.method === 'POST' && path === '/renew') {
     const authHeader = req.headers.authorization
     if (!authHeader || authHeader !== `Bearer ${BOT_SECRET}`) {
