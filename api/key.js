@@ -203,7 +203,7 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Key required' })
     }
 
-    const HWID_API_BASE = 'https://vortixworld-end.vercel.app'
+    const HWID_API_BASE = 'https://retard.vercel.app'
     const HWID_RESET_SECRET = process.env.HWID_RESET_SECRET || BOT_SECRET
 
     try {
